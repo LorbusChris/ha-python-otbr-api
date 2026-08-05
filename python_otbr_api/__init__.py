@@ -113,6 +113,15 @@ class EphemeralKeyConflictError(OTBRError):
     key is already active."""
 
 
+class PendingDatasetConflictError(OTBRError):
+    """Raised when a pending dataset write is refused because one is in place.
+
+    Its own type rather than a plain OTBRError: the caller's next step is
+    different from the one a transport or protocol failure calls for, since
+    nothing was written and the state that made the write wrong is readable.
+    """
+
+
 def _rewrite_keys(data: Any, mapping: dict[str, str]) -> Any:
     """Recursively rename dict keys according to mapping; pass through others."""
     if not isinstance(data, dict):
@@ -369,6 +378,43 @@ class OTBR:  # pylint: disable=too-many-public-methods
 
         if response.status == HTTPStatus.CONFLICT:
             raise ThreadNetworkActiveError
+        if response.status not in (HTTPStatus.CREATED, HTTPStatus.OK):
+            raise OTBRError(f"unexpected http status {response.status}")
+
+    async def set_pending_dataset_tlvs(self, dataset: bytes) -> None:
+        """Set the pending operational dataset, when none is in place yet.
+
+        A write while a pending dataset is in flight is refused outright.
+        Superseding one is never safe to do implicitly: the replacement races
+        the delay timer on every device that already holds the old dataset, so
+        a late replacement can split the mesh, and it would also silently undo
+        whatever the in-flight dataset was doing, such as a channel change.
+        A caller that finds the write refused should surface that to whoever
+        asked for it, not retry.
+
+        The check runs locally first, and again on the border router for one
+        that honors If-None-Match on this endpoint
+        (https://github.com/openthread/ot-br-posix/pull/3552), where it is
+        atomic with the write; older border routers ignore the header.
+
+        Raises PendingDatasetConflictError when either check refuses the
+        write, and OTBRError if the http status is 400 or higher for any
+        other reason or the response is invalid.
+        """
+        if await self.get_pending_dataset_tlvs() is not None:
+            raise PendingDatasetConflictError("a pending dataset is already in place")
+        await self._maybe_detect_key_format()
+        response = await self._session.put(
+            f"{self._url}/node/dataset/pending",
+            data=dataset.hex(),
+            headers={"Content-Type": "text/plain", "If-None-Match": "*"},
+            timeout=aiohttp.ClientTimeout(total=10),
+        )
+
+        if response.status == HTTPStatus.CONFLICT:
+            raise ThreadNetworkActiveError
+        if response.status == HTTPStatus.PRECONDITION_FAILED:
+            raise PendingDatasetConflictError("a pending dataset is already in place")
         if response.status not in (HTTPStatus.CREATED, HTTPStatus.OK):
             raise OTBRError(f"unexpected http status {response.status}")
 
