@@ -376,6 +376,7 @@ async def test_set_channel(aioclient_mock: AiohttpClientMocker) -> None:
     )
 
     aioclient_mock.get(f"{BASE_URL}/node/dataset/active", json=DATASET_JSON)
+    aioclient_mock.get(f"{BASE_URL}/node/dataset/pending", status=HTTPStatus.NO_CONTENT)
     aioclient_mock.put(f"{BASE_URL}/node/dataset/pending", status=HTTPStatus.CREATED)
     new_channel = 16
     expected_active_timestamp = DATASET_JSON["ActiveTimestamp"] | {"Seconds": 2}
@@ -390,12 +391,14 @@ async def test_set_channel(aioclient_mock: AiohttpClientMocker) -> None:
 
     assert new_channel != DATASET_JSON["Channel"]
     await otbr.set_channel(new_channel, 1234)
-    assert aioclient_mock.call_count == 2
+    assert aioclient_mock.call_count == 3
     assert aioclient_mock.mock_calls[0][0] == "GET"
-    assert aioclient_mock.mock_calls[0][1].path == "/node/dataset/active"
-    assert aioclient_mock.mock_calls[1][0] == "PUT"
-    assert aioclient_mock.mock_calls[1][1].path == "/node/dataset/pending"
-    assert aioclient_mock.mock_calls[1][2] == expected_pending_dataset
+    assert aioclient_mock.mock_calls[0][1].path == "/node/dataset/pending"
+    assert aioclient_mock.mock_calls[1][0] == "GET"
+    assert aioclient_mock.mock_calls[1][1].path == "/node/dataset/active"
+    assert aioclient_mock.mock_calls[2][0] == "PUT"
+    assert aioclient_mock.mock_calls[2][1].path == "/node/dataset/pending"
+    assert aioclient_mock.mock_calls[2][2] == expected_pending_dataset
 
 
 async def test_set_channel_default_delay(aioclient_mock: AiohttpClientMocker) -> None:
@@ -405,6 +408,7 @@ async def test_set_channel_default_delay(aioclient_mock: AiohttpClientMocker) ->
     )
 
     aioclient_mock.get(f"{BASE_URL}/node/dataset/active", json=DATASET_JSON)
+    aioclient_mock.get(f"{BASE_URL}/node/dataset/pending", status=HTTPStatus.NO_CONTENT)
     aioclient_mock.put(f"{BASE_URL}/node/dataset/pending", status=HTTPStatus.CREATED)
     new_channel = 16
     expected_active_timestamp = DATASET_JSON["ActiveTimestamp"] | {"Seconds": 2}
@@ -419,12 +423,14 @@ async def test_set_channel_default_delay(aioclient_mock: AiohttpClientMocker) ->
 
     assert new_channel != DATASET_JSON["Channel"]
     await otbr.set_channel(new_channel)
-    assert aioclient_mock.call_count == 2
+    assert aioclient_mock.call_count == 3
     assert aioclient_mock.mock_calls[0][0] == "GET"
-    assert aioclient_mock.mock_calls[0][1].path == "/node/dataset/active"
-    assert aioclient_mock.mock_calls[1][0] == "PUT"
-    assert aioclient_mock.mock_calls[1][1].path == "/node/dataset/pending"
-    assert aioclient_mock.mock_calls[1][2] == expected_pending_dataset
+    assert aioclient_mock.mock_calls[0][1].path == "/node/dataset/pending"
+    assert aioclient_mock.mock_calls[1][0] == "GET"
+    assert aioclient_mock.mock_calls[1][1].path == "/node/dataset/active"
+    assert aioclient_mock.mock_calls[2][0] == "PUT"
+    assert aioclient_mock.mock_calls[2][1].path == "/node/dataset/pending"
+    assert aioclient_mock.mock_calls[2][2] == expected_pending_dataset
 
 
 async def test_set_channel_no_timestamp(aioclient_mock: AiohttpClientMocker) -> None:
@@ -437,6 +443,7 @@ async def test_set_channel_no_timestamp(aioclient_mock: AiohttpClientMocker) -> 
     dataset_json.pop("ActiveTimestamp")
 
     aioclient_mock.get(f"{BASE_URL}/node/dataset/active", json=dataset_json)
+    aioclient_mock.get(f"{BASE_URL}/node/dataset/pending", status=HTTPStatus.NO_CONTENT)
     aioclient_mock.put(f"{BASE_URL}/node/dataset/pending", status=HTTPStatus.CREATED)
     new_channel = 16
     expected_active_timestamp = {"Authoritative": False, "Seconds": 1, "Ticks": 0}
@@ -451,12 +458,14 @@ async def test_set_channel_no_timestamp(aioclient_mock: AiohttpClientMocker) -> 
 
     assert new_channel != DATASET_JSON["Channel"]
     await otbr.set_channel(new_channel)
-    assert aioclient_mock.call_count == 2
+    assert aioclient_mock.call_count == 3
     assert aioclient_mock.mock_calls[0][0] == "GET"
-    assert aioclient_mock.mock_calls[0][1].path == "/node/dataset/active"
-    assert aioclient_mock.mock_calls[1][0] == "PUT"
-    assert aioclient_mock.mock_calls[1][1].path == "/node/dataset/pending"
-    assert aioclient_mock.mock_calls[1][2] == expected_pending_dataset
+    assert aioclient_mock.mock_calls[0][1].path == "/node/dataset/pending"
+    assert aioclient_mock.mock_calls[1][0] == "GET"
+    assert aioclient_mock.mock_calls[1][1].path == "/node/dataset/active"
+    assert aioclient_mock.mock_calls[2][0] == "PUT"
+    assert aioclient_mock.mock_calls[2][1].path == "/node/dataset/pending"
+    assert aioclient_mock.mock_calls[2][2] == expected_pending_dataset
 
 
 async def test_set_channel_invalid_channel(aioclient_mock: AiohttpClientMocker) -> None:
@@ -475,10 +484,36 @@ async def test_set_channel_no_dataset(aioclient_mock: AiohttpClientMocker) -> No
         BASE_URL, aioclient_mock.create_session(), key_format=KeyFormat.PASCAL_CASE
     )
 
+    aioclient_mock.get(f"{BASE_URL}/node/dataset/pending", status=HTTPStatus.NO_CONTENT)
     aioclient_mock.get(f"{BASE_URL}/node/dataset/active", status=HTTPStatus.NO_CONTENT)
 
     with pytest.raises(python_otbr_api.OTBRError):
         await otbr.set_channel(16)
+
+
+async def test_set_channel_rejected_while_pending(
+    aioclient_mock: AiohttpClientMocker,
+) -> None:
+    """A channel change is refused while a pending dataset is in place.
+
+    Stamping from the active dataset alone would make the mesh silently ignore
+    the write, and superseding the pending dataset would race its delay timer
+    on devices that miss the update; refusing is the only honest answer.
+    """
+    otbr = python_otbr_api.OTBR(
+        BASE_URL, aioclient_mock.create_session(), key_format=KeyFormat.PASCAL_CASE
+    )
+
+    mock_response = (
+        "0E080000000000010000340400006699000300000C35060004001FFFE00208057B7CD3D6CC9F65"
+        "0708FD17C9D59809B27A05107546326F20BCCFD946609FBAF7F39AD5030F4F70656E5468726561"
+        "642D32366363010226CC0410FA7EC34EBE58DD1FD74F13F65D021C5B0C0402A0F7F8"
+    )
+    aioclient_mock.get(f"{BASE_URL}/node/dataset/pending", text=mock_response)
+
+    with pytest.raises(python_otbr_api.OTBRError):
+        await otbr.set_channel(16)
+    assert aioclient_mock.call_count == 1
 
 
 async def test_get_extended_address(aioclient_mock: AiohttpClientMocker) -> None:
