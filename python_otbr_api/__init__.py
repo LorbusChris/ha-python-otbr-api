@@ -120,7 +120,7 @@ def _rewrite_keys(data: Any, mapping: dict[str, str]) -> Any:
     return {mapping.get(k, k): _rewrite_keys(v, mapping) for k, v in data.items()}
 
 
-class OTBR:  # pylint: disable=too-few-public-methods
+class OTBR:  # pylint: disable=too-many-public-methods
     """Class to interact with the Open Thread Border Router REST API."""
 
     def __init__(
@@ -378,10 +378,15 @@ class OTBR:  # pylint: disable=too-few-public-methods
         """Change the channel
 
         The channel is changed by creating a new pending dataset based on the active
-        dataset.
+        dataset. If a pending dataset is already in place, the change is refused:
+        stamping from the active dataset alone would make the mesh silently ignore
+        it while the router accepts the write, and superseding the pending dataset
+        would race its delay timer on devices that miss the update.
         """
         if not 11 <= channel <= 26:
             raise OTBRError(f"invalid channel {channel}")
+        if await self.get_pending_dataset_tlvs() is not None:
+            raise OTBRError("a pending dataset is already in place")
         if not (dataset := await self.get_active_dataset()):
             raise OTBRError("router has no active dataset")
 
