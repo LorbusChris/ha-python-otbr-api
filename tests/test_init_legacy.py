@@ -790,3 +790,90 @@ async def test_get_coprocessor_version_invalid(aioclient_mock: AiohttpClientMock
 
     with pytest.raises(python_otbr_api.OTBRError):
         await otbr.get_coprocessor_version()
+
+
+async def test_set_pending_dataset_tlvs(aioclient_mock: AiohttpClientMocker) -> None:
+    """Test set_pending_dataset_tlvs."""
+    otbr = python_otbr_api.OTBR(
+        BASE_URL, aioclient_mock.create_session(), key_format=KeyFormat.PASCAL_CASE
+    )
+
+    dataset = bytes.fromhex(
+        "0E080000000000010000000300000F35060004001FFFE0020811111111222222220708FDAD"
+        "70BFE5AA15DD051000112233445566778899AABBCCDDEEFF030E4F70656E54687265616444"
+        "656D6F010212340410445F2B5CA6F2A93A55CE570A70EFEECB0C0402A0F7F8"
+    )
+    aioclient_mock.get(f"{BASE_URL}/node/dataset/pending", status=HTTPStatus.NO_CONTENT)
+    aioclient_mock.put(f"{BASE_URL}/node/dataset/pending", status=HTTPStatus.CREATED)
+
+    await otbr.set_pending_dataset_tlvs(dataset)
+    assert aioclient_mock.call_count == 2
+    assert aioclient_mock.mock_calls[-1][0] == "PUT"
+    assert aioclient_mock.mock_calls[-1][1].path == "/node/dataset/pending"
+    assert aioclient_mock.mock_calls[-1][2] == dataset.hex()
+    assert aioclient_mock.mock_calls[-1][3]["If-None-Match"] == "*"
+
+
+async def test_set_pending_dataset_tlvs_thread_active(
+    aioclient_mock: AiohttpClientMocker,
+) -> None:
+    """Test set_pending_dataset_tlvs with error."""
+    otbr = python_otbr_api.OTBR(
+        BASE_URL, aioclient_mock.create_session(), key_format=KeyFormat.PASCAL_CASE
+    )
+
+    aioclient_mock.get(f"{BASE_URL}/node/dataset/pending", status=HTTPStatus.NO_CONTENT)
+    aioclient_mock.put(f"{BASE_URL}/node/dataset/pending", status=HTTPStatus.CONFLICT)
+
+    with pytest.raises(python_otbr_api.ThreadNetworkActiveError):
+        await otbr.set_pending_dataset_tlvs(b"")
+
+
+async def test_set_pending_dataset_tlvs_refused_while_pending(
+    aioclient_mock: AiohttpClientMocker,
+) -> None:
+    """Test a write is refused while a pending dataset is in place."""
+    otbr = python_otbr_api.OTBR(
+        BASE_URL, aioclient_mock.create_session(), key_format=KeyFormat.PASCAL_CASE
+    )
+
+    in_flight = "0E080000000000010000340400006699000300000C"
+    aioclient_mock.get(f"{BASE_URL}/node/dataset/pending", text=in_flight)
+
+    with pytest.raises(python_otbr_api.PendingDatasetConflictError):
+        await otbr.set_pending_dataset_tlvs(bytes.fromhex(in_flight))
+    assert aioclient_mock.call_count == 1
+
+
+async def test_set_pending_dataset_tlvs_refused_by_router(
+    aioclient_mock: AiohttpClientMocker,
+) -> None:
+    """Test the border router refusing the precondition is surfaced."""
+    otbr = python_otbr_api.OTBR(
+        BASE_URL, aioclient_mock.create_session(), key_format=KeyFormat.PASCAL_CASE
+    )
+
+    aioclient_mock.get(f"{BASE_URL}/node/dataset/pending", status=HTTPStatus.NO_CONTENT)
+    aioclient_mock.put(
+        f"{BASE_URL}/node/dataset/pending", status=HTTPStatus.PRECONDITION_FAILED
+    )
+
+    # The dedicated type, so a caller can tell "nothing was written because a
+    # dataset is in place" from a transport or protocol failure.
+    with pytest.raises(python_otbr_api.PendingDatasetConflictError):
+        await otbr.set_pending_dataset_tlvs(b"")
+
+
+async def test_set_pending_dataset_tlvs_202(
+    aioclient_mock: AiohttpClientMocker,
+) -> None:
+    """Test set_pending_dataset_tlvs with error."""
+    otbr = python_otbr_api.OTBR(
+        BASE_URL, aioclient_mock.create_session(), key_format=KeyFormat.PASCAL_CASE
+    )
+
+    aioclient_mock.get(f"{BASE_URL}/node/dataset/pending", status=HTTPStatus.NO_CONTENT)
+    aioclient_mock.put(f"{BASE_URL}/node/dataset/pending", status=HTTPStatus.ACCEPTED)
+
+    with pytest.raises(python_otbr_api.OTBRError):
+        await otbr.set_pending_dataset_tlvs(b"")
